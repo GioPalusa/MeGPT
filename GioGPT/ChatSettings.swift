@@ -79,15 +79,15 @@ class ChatSettings: ObservableObject {
     
     /// Resets all settings to their default values.
     func resetToDefaults() {
-        self.temperature = 1.0
-        self.topP = 1.0
-        self.maxTokens = 100
-        self.presencePenalty = 0.0
-        self.frequencyPenalty = 0.0
-        self.repeatPenalty = 1.0
-        self.seed = nil
-        self.stopSequences = nil
-        self.stream = true
+        temperature = 1.0
+        topP = 1.0
+        maxTokens = 100
+        presencePenalty = 0.0
+        frequencyPenalty = 0.0
+        repeatPenalty = 1.0
+        seed = nil
+        stopSequences = nil
+        stream = true
         
         // Update UserDefaults as well
         UserDefaults.standard.set(temperature, forKey: "temperature")

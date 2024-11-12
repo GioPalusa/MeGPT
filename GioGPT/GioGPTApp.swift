@@ -19,7 +19,7 @@ struct GioGPTApp: App {
     
     init() {
         // Initialize `lmStudioClient` with the main context of `modelContainer`
-        let apiClient = LMStudioApiClient(baseURL: "http://palusa.tplinkdns.com:1234", context: modelContainer.mainContext)
+        let apiClient = LMStudioApiClient(baseURL: "http://myaddress.to.lmStudio:port", context: modelContainer.mainContext)
         _lmStudioClient = StateObject(wrappedValue: apiClient)
     }
     

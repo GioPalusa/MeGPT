@@ -15,6 +15,7 @@ struct SettingsView: View {
 
     @State private var baseURL: String
     @State private var port: String
+    @State private var protocolType: String = "http"
     @State private var isRefreshing = false
     @State private var serverSettingsError: String? = nil
     @State private var modelRefreshError: String? = nil
@@ -27,48 +28,54 @@ struct SettingsView: View {
         let fullBaseURL = lmStudioClient.baseURL
         _baseURL = State(initialValue: fullBaseURL.host ?? "")
         _port = State(initialValue: "\(fullBaseURL.port ?? 1234)")
+        _protocolType = State(initialValue: fullBaseURL.scheme ?? "http")
     }
     
     var body: some View {
         Form {
             Section(header: Text("Server Settings")) {
-                DisclosureGroup("Server Address") {
-                    VStack(alignment: .leading, spacing: 8) {
-                        TextField("Server Address (Base URL)", text: $baseURL)
-                            .textInputAutocapitalization(.never)
-                            .disableAutocorrection(true)
-                            .keyboardType(.URL)
-                            .textFieldStyle(RoundedBorderTextFieldStyle())
-                        
-                        TextField("Port", text: $port)
-                            .keyboardType(.numberPad)
-                            .textFieldStyle(RoundedBorderTextFieldStyle())
-                        
-                        Button(action: {
-                            Task {
-                                await applyNewBaseURL()
-                            }
-                        }) {
-                            Text("Apply Server Settings")
-                                .frame(maxWidth: .infinity, alignment: .center)
-                        }
-                        .buttonStyle(.borderedProminent)
-                        .padding(.top, 8)
-                        
-                        if let error = serverSettingsError {
-                            Text(error)
-                                .font(.footnote)
-                                .foregroundColor(.red)
-                                .multilineTextAlignment(.leading)
-                                .padding(.top, 4)
-                        } else if successfullyConfigured {
-                            Text("Successfully connected to server")
-                                .font(.footnote)
-                                .foregroundColor(.green)
-                                .multilineTextAlignment(.leading)
-                                .padding(.top, 4)
-                        }
+                Picker("Protocol", selection: $protocolType) {
+                    Text("HTTP").tag("http")
+                    Text("HTTPS").tag("https")
+                }
+                .pickerStyle(SegmentedPickerStyle())
+                .onChange(of: protocolType) { _, newType in
+                    Task {
+                        try await lmStudioClient.updateBaseURL(newType)
                     }
+                }
+
+                TextField("Server Address", text: $baseURL)
+                    .textInputAutocapitalization(.never)
+                    .disableAutocorrection(true)
+                    .keyboardType(.URL)
+                    .textFieldStyle(RoundedBorderTextFieldStyle())
+
+                TextField("Port", text: $port)
+                    .keyboardType(.numberPad)
+                    .textFieldStyle(RoundedBorderTextFieldStyle())
+
+                Button(action: {
+                    Task {
+                        try await applyNewBaseURL()
+                    }
+                }) {
+                    Text("Apply Server Settings")
+                        .frame(maxWidth: .infinity, alignment: .center)
+                }
+                .buttonStyle(.borderedProminent)
+                .padding(.top, 8)
+                            
+                if let error = serverSettingsError {
+                    Text(error)
+                        .font(.footnote)
+                        .foregroundColor(.red)
+                } else if successfullyConfigured {
+                    Text("Successfully connected to server")
+                        .font(.footnote)
+                        .foregroundColor(.green)
+                        .multilineTextAlignment(.leading)
+                        .padding(.top, 4)
                 }
             }
             
@@ -262,7 +269,7 @@ struct SettingsView: View {
             if conversationToDelete == lmStudioClient.currentConversation {
                 lmStudioClient.currentConversation = nil
             }
-            modelContext.delete(conversationToDelete)  // Delete the conversation from the context
+            modelContext.delete(conversationToDelete) // Delete the conversation from the context
         }
         
         // Explicitly save the context after deletion to persist changes
@@ -273,16 +280,14 @@ struct SettingsView: View {
         }
     }
     
-    private func applyNewBaseURL() async {
-        let formattedBaseURL = "http://\(baseURL):\(port)"
-        serverSettingsError = nil
+    private func applyNewBaseURL() async throws {
+        let formattedBaseURL = "\(protocolType)://\(baseURL):\(port)"
         do {
             try await lmStudioClient.updateBaseURL(formattedBaseURL)
+            successfullyConfigured = true
         } catch {
-            serverSettingsError = "Failed to apply server settings: \(error.localizedDescription)"
-            successfullyConfigured = false
+            serverSettingsError = error.localizedDescription
         }
-        successfullyConfigured = true
     }
     
     private func refreshModels() async {
@@ -290,8 +295,9 @@ struct SettingsView: View {
         modelRefreshError = nil
         do {
             try await lmStudioClient.fetchModels()
+            successfullyConfigured = true
         } catch {
-            modelRefreshError = "Failed to refresh models: \(error.localizedDescription)"
+            serverSettingsError = error.localizedDescription
         }
         isRefreshing = false
     }
