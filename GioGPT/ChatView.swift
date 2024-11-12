@@ -1,16 +1,19 @@
-import SwiftUI
 import CoreHaptics
+import SwiftData
+import SwiftUI
 
 struct ChatView: View {
     @EnvironmentObject var settings: ChatSettings
     @EnvironmentObject var lmStudioClient: LMStudioApiClient
+    @Environment(\.modelContext) private var context
     @State private var prompt = ""
     @State private var isLoading = false
-    @State private var conversation: Conversation?
     @State private var errorMessage: String?
     @State private var isShowingSettings = false
     @State private var isInitialAppear = true
     @Environment(\.colorScheme) var colorScheme
+    
+    @Query(sort: \Conversation.lastUsed, order: .reverse) private var savedConversations: [Conversation]
 
     var body: some View {
         NavigationStack {
@@ -20,12 +23,11 @@ struct ChatView: View {
                     
                     // Settings button with dropdown menu
                     Menu {
-                        // List saved conversations
-                        if !lmStudioClient.savedConversations.isEmpty {
+                        if !savedConversations.isEmpty {
                             Menu("Load Conversation") {
-                                ForEach(lmStudioClient.savedConversations) { conversationMetadata in
+                                ForEach(savedConversations) { conversationMetadata in
                                     Button(action: {
-                                        conversation = lmStudioClient.savedConversations.first(where: { $0.id == conversationMetadata.id })
+                                        lmStudioClient.currentConversation = conversationMetadata
                                     }) {
                                         if let title = conversationMetadata.title {
                                             Text(title)
@@ -37,13 +39,10 @@ struct ChatView: View {
                             }
                         }
                         
-                        // New conversation option
                         Button("New Conversation") {
-                            conversation = Conversation()  // Reset to a new conversation instance
-                            lmStudioClient.startNewConversation()
+                            lmStudioClient.currentConversation = lmStudioClient.startNewConversation()
                         }
                         
-                        // Navigate to settings
                         Button("Settings") {
                             isShowingSettings.toggle()
                         }
@@ -58,22 +57,20 @@ struct ChatView: View {
                 ScrollViewReader { scrollViewProxy in
                     ScrollView {
                         VStack(alignment: .leading, spacing: 10) {
-                            if let conversation = conversation {
-                                ForEach(conversation.messages.sorted(), id: \.id) { message in
+                            if let conversation = lmStudioClient.currentConversation, !conversation.messages.isEmpty {
+                                // Show messages if conversation is not empty
+                                ForEach(conversation.messages.sorted(by: { $0.timestamp < $1.timestamp }), id: \.id) { message in
                                     HStack {
                                         if message.isUser {
                                             Spacer()
                                             Text(message.text)
                                                 .padding(10)
-                                                .background(Color(red: 0.5, green: 0.0, blue: 0.0)) // Dark red
+                                                .background(Color(red: 0.5, green: 0.0, blue: 0.0))
                                                 .cornerRadius(8)
                                                 .foregroundColor(.white)
                                                 .textSelection(.enabled)
                                         } else {
                                             Text(message.text)
-                                                .padding(10)
-                                                .background(.clear) // Dark forest green
-                                                .cornerRadius(8)
                                                 .textSelection(.enabled)
                                             Spacer()
                                         }
@@ -81,6 +78,7 @@ struct ChatView: View {
                                     .id(message.id)
                                 }
                             } else {
+                                // Display welcome message if no conversation or it's empty
                                 Text("Welcome to Gio GPT")
                                     .font(.headline)
                                     .foregroundColor(.primary)
@@ -107,16 +105,16 @@ struct ChatView: View {
                             }
                         }
                         .padding()
-                        .onChange(of: conversation?.messages.count) { _, _ in
-                            if let lastMessage = conversation?.messages.last {
+                        .onChange(of: lmStudioClient.currentConversation?.messages.count) { _, _ in
+                            if let lastMessage = lmStudioClient.currentConversation?.messages.last {
                                 scrollToLastMessage(scrollViewProxy: scrollViewProxy, lastMessage: lastMessage)
                             }
                         }
                         .background(
-                            NavigationLink(destination: SettingsView(lmStudioClient: lmStudioClient), isActive: $isShowingSettings) {
-                                EmptyView()
-                            }
-                            .hidden()
+                            EmptyView()
+                                .navigationDestination(isPresented: $isShowingSettings) {
+                                    SettingsView(lmStudioClient: lmStudioClient)
+                                }
                         )
                     }
                     
@@ -149,32 +147,31 @@ struct ChatView: View {
                     .cornerRadius(8)
                 }
             }
+            .navigationTitle(lmStudioClient.currentConversation?.title ?? "")
+            .navigationBarTitleDisplayMode(.inline)
             .onAppear {
                 if isInitialAppear {
                     Task {
-                        // Fetch models and set selected model
                         do {
                             try await lmStudioClient.fetchModels()
                             await MainActor.run {
                                 if let lastModelID = lmStudioClient.selectedModelID,
-                                   let model = lmStudioClient.models.first(where: { $0.id == lastModelID }) {
+                                   let model = lmStudioClient.models.first(where: { $0.id == lastModelID })
+                                {
                                     lmStudioClient.selectedModelID = model.id
-                                } else {
-                                    lmStudioClient.selectedModelID = lmStudioClient.models.first?.id
-                                    if let firstModelID = lmStudioClient.selectedModelID {
-                                        lmStudioClient.saveLastSelectedModelID(firstModelID)
-                                    }
+                                } else if let firstModelID = lmStudioClient.models.first?.id {
+                                    lmStudioClient.selectedModelID = firstModelID
+                                    lmStudioClient.saveLastSelectedModelID(firstModelID)
                                 }
                             }
                         } catch {
                             print("Error fetching models: \(error)")
                         }
                         
-                        // Load the most recent conversation
-                        if let recentConversationID = lmStudioClient.currentConversationID {
-                            conversation = lmStudioClient.savedConversations.first(where: { $0.id == recentConversationID })
+                        if let lastConversation = savedConversations.first {
+                            lmStudioClient.currentConversation = lastConversation
                         } else {
-                            conversation = Conversation() // Start a new conversation if none exists
+                            lmStudioClient.currentConversation = lmStudioClient.startNewConversation()
                         }
                         
                         prepareHaptics()
@@ -184,7 +181,7 @@ struct ChatView: View {
             }
         }
     }
-    
+
     private func sendMessage(scrollViewProxy: ScrollViewProxy) async {
         guard let selectedModelID = lmStudioClient.selectedModelID else {
             errorMessage = "Please select a model"
@@ -193,72 +190,84 @@ struct ChatView: View {
 
         let userPrompt = prompt
         prompt = ""
-        let userMessage = Message(id: UUID(), text: userPrompt, isUser: true)
-
-        // Add user message to conversation and save it immediately
-        withAnimation { conversation?.messages.append(userMessage) }
-        if let conversation = conversation {
-            lmStudioClient.appendMessages([userMessage], toConversationWithID: conversation.id)
+        var accumulatedContent = ""
+        var aiResponseMessage: Message?
+        
+        if lmStudioClient.currentConversation == nil {
+            let newconversation = lmStudioClient.startNewConversation()
+            lmStudioClient.currentConversation = newconversation
         }
 
+        guard let currentConversation = lmStudioClient.currentConversation else {
+            errorMessage = "Error creating conversation"
+            return
+        }
+        if let userMessage = lmStudioClient.addMessage(to: currentConversation, text: userPrompt, isUser: true) {
+            scrollToLastMessage(scrollViewProxy: scrollViewProxy, lastMessage: userMessage)
+                
+            if lmStudioClient.currentConversation?.title == nil, let currentConversation = lmStudioClient.currentConversation {
+                Task {
+                    let generatedTitle = try await lmStudioClient.generateConversationTitle(
+                        conversation: currentConversation.messages,
+                        modelId: selectedModelID,
+                        context: context
+                    )
+                    lmStudioClient.currentConversation?.title = generatedTitle
+                    try context.save()
+                }
+            }
+        }
+        
         isLoading = true
 
         do {
-            let stream = try await lmStudioClient.sendChatCompletion(
-                conversation: conversation?.messages ?? [],
-                modelId: selectedModelID,
-                topP: settings.topP,
-                temperature: settings.temperature,
-                maxTokens: settings.maxTokens,
-                stream: settings.stream ?? true
-            )
+            if settings.stream == true {
+                let stream = try await lmStudioClient.sendChatCompletion(
+                    conversation: lmStudioClient.currentConversation!.messages,
+                    modelId: selectedModelID,
+                    topP: settings.topP,
+                    temperature: settings.temperature,
+                    maxTokens: settings.maxTokens,
+                    stream: true
+                )
 
-            var accumulatedContent = ""
-            
-            // Temporary message for displaying streaming content without saving yet
-            var streamingMessage: Message? = nil
+                for try await content in stream {
+                    accumulatedContent += content
 
-            for try await content in stream {
-                accumulatedContent += content
-
-                DispatchQueue.main.async {
-                    withAnimation {
-                        if let existingMessage = streamingMessage {
-                            // Update the message that is already being displayed
-                            if let index = conversation?.messages.firstIndex(where: { $0.id == existingMessage.id }) {
-                                conversation?.messages[index].text = accumulatedContent
-                            }
+                    try await MainActor.run {
+                        if aiResponseMessage == nil {
+                            aiResponseMessage = lmStudioClient.addMessage(to: lmStudioClient.currentConversation!, text: accumulatedContent, isUser: false)
                         } else {
-                            // Create a new message for the first chunk of the response
-                            let partialMessage = Message(id: UUID(), text: accumulatedContent, isUser: false)
-                            conversation?.messages.append(partialMessage)
-                            streamingMessage = partialMessage
+                            aiResponseMessage?.text = accumulatedContent
+                            try context.save()
                         }
-                        scrollToLastMessage(scrollViewProxy: scrollViewProxy, lastMessage: streamingMessage!)
+
+                        if let lastMessage = aiResponseMessage {
+                            scrollToLastMessage(scrollViewProxy: scrollViewProxy, lastMessage: lastMessage)
+                        }
                     }
                 }
-            }
+            } else {
+                guard let responseContent = try await lmStudioClient.sendChatCompletions(
+                    conversation: lmStudioClient.currentConversation!.messages,
+                    modelId: selectedModelID,
+                    topP: settings.topP,
+                    temperature: settings.temperature,
+                    maxTokens: settings.maxTokens
+                ) else { return }
 
-            // Save the complete AI message after streaming has finished
-            if var finalMessage = streamingMessage {
-                DispatchQueue.main.async {
-                    finalMessage.text = accumulatedContent
-                    if let conversation = conversation {
-                        lmStudioClient.appendMessages([finalMessage], toConversationWithID: conversation.id)
-                    }
-                    triggerHapticFeedback()
+                if let finalMessage = lmStudioClient.addMessage(to: lmStudioClient.currentConversation!, text: responseContent, isUser: false) {
+                    scrollToLastMessage(scrollViewProxy: scrollViewProxy, lastMessage: finalMessage)
                 }
             }
-
         } catch {
-            DispatchQueue.main.async {
+            await MainActor.run {
                 errorMessage = "Failed to get a response 📣 🆘 \(error.localizedDescription)"
             }
         }
-
         isLoading = false
     }
-        
+
     private func scrollToLastMessage(scrollViewProxy: ScrollViewProxy, lastMessage: Message) {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
             withAnimation {

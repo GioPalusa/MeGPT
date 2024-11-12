@@ -5,9 +5,11 @@
 //  Created by Giovanni Palusa on 2024-11-09.
 //
 
+import SwiftData
 import SwiftUI
 
 struct SettingsView: View {
+    private var context: ModelContext?
     @EnvironmentObject var settings: ChatSettings
     @EnvironmentObject var lmStudioClient: LMStudioApiClient
 
@@ -17,7 +19,10 @@ struct SettingsView: View {
     @State private var serverSettingsError: String? = nil
     @State private var modelRefreshError: String? = nil
     @State private var successfullyConfigured: Bool = false
-        
+    
+    @Query(sort: \Conversation.lastUsed, order: .reverse) var conversations: [Conversation]
+    @Environment(\.modelContext) private var modelContext
+
     init(lmStudioClient: LMStudioApiClient) {
         let fullBaseURL = lmStudioClient.baseURL
         _baseURL = State(initialValue: fullBaseURL.host ?? "")
@@ -221,14 +226,13 @@ struct SettingsView: View {
                     .padding(.top, 8)
                 }
 
-                
                 Section(header: Text("Chat Conversations")) {
-                    if lmStudioClient.savedConversations.isEmpty {
+                    if conversations.isEmpty {
                         Text("No conversations available.")
                             .foregroundColor(.secondary)
                     } else {
                         List {
-                            ForEach(lmStudioClient.savedConversations) { conversation in
+                            ForEach(conversations) { conversation in
                                 HStack {
                                     Text(conversation.title ?? "Untitled Conversation")
                                         .font(.headline)
@@ -244,20 +248,30 @@ struct SettingsView: View {
                 }
             }
         }
-    
         .navigationTitle("Settings")
         .navigationTitle("Settings")
         .toolbar {
-            EditButton()  // Enable edit mode for deletion
+            EditButton()
         }
     }
     
+    // Function to handle deletion and persistence
     private func deleteConversation(at offsets: IndexSet) {
-            for index in offsets {
-                let conversationID = lmStudioClient.savedConversations[index].id
-                lmStudioClient.deleteConversation(withID: conversationID)
+        for index in offsets {
+            let conversationToDelete = conversations[index]
+            if conversationToDelete == lmStudioClient.currentConversation {
+                lmStudioClient.currentConversation = nil
             }
+            modelContext.delete(conversationToDelete)  // Delete the conversation from the context
         }
+        
+        // Explicitly save the context after deletion to persist changes
+        do {
+            try modelContext.save()
+        } catch {
+            print("Failed to save context after deletion: \(error)")
+        }
+    }
     
     private func applyNewBaseURL() async {
         let formattedBaseURL = "http://\(baseURL):\(port)"

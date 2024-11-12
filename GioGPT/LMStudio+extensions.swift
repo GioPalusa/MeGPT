@@ -6,20 +6,21 @@
 //
 
 import Foundation
+import SwiftData
 
 extension LMStudioApiClient {
     
-    func generateConversationTitle(conversation: [Message], modelId: String) async throws -> String {
+    /// Generates a conversation title based on its content and updates the title in the Core Data model.
+    @MainActor
+    func generateConversationTitle(conversation: [Message], modelId: String, context: ModelContext) async throws -> String {
+        // Adjusted prompt to request a concise title
         let titlePrompt = """
-        Provide a very short, descriptive title for this message. Limit to max 6 words and focus only on the main topic or purpose.
-        Respond only with the title.
+        Generate a concise, relevant title (max 6 words) for this conversation based on the main topic. Never answer the user, just summarize what the user wants from this text: \(conversation.first?.text ?? ""). Only respond with the title, no other text.
         """
-
-        var messagesForTitle = Array(conversation.prefix(1))
-        messagesForTitle.insert(Message(text: titlePrompt, isUser: false), at: 0)
-
+        
+        // Request the title from the model
         let title = try await sendChatCompletions(
-            conversation: messagesForTitle,
+            conversation: [Message(text: titlePrompt, isUser: false)],
             modelId: modelId,
             topP: 0.5,
             temperature: 0.2,
@@ -28,18 +29,34 @@ extension LMStudioApiClient {
             frequencyPenalty: 0.5
         )
         
-        let trimmedTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
-                                .trimmingCharacters(in: CharacterSet(charactersIn: "\""))
+        // Trim and format the generated title
+        var trimmedTitle = title?.trimmingCharacters(in: .whitespacesAndNewlines)
+            .trimmingCharacters(in: CharacterSet(charactersIn: "\""))
         
-        if let currentConversationID = currentConversationID,
-           let index = savedConversations.firstIndex(where: { $0.id == currentConversationID }) {
-            DispatchQueue.main.async {
-                self.savedConversations[index].title = trimmedTitle
-                self.titleGenerated = true
-                self.saveConversations()  // Persist the conversation with the new title
+        // Ensure the title is not too verbose
+        if let title = trimmedTitle, title.count > 50 {
+            trimmedTitle = String(title.prefix(50)) + "..."
+        }
+        
+        // Update the conversation title in Core Data if it doesn't already exist
+        if let currentConversation = currentConversation, currentConversation.title == nil {
+            await MainActor.run {
+                currentConversation.title = trimmedTitle
+                titleGenerated = true
+                
+                // Save the updated title to Core Data
+                do {
+                    try context.save()
+                } catch {
+                    print("Failed to save conversation title: \(error)")
+                }
             }
         }
         
-        return trimmedTitle
+        if let trimmedTitle, !trimmedTitle.isEmpty {
+            return trimmedTitle
+        } else {
+            return "New Chat"
+        }
     }
 }
