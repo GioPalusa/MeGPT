@@ -25,13 +25,14 @@ meGPT is a conversational AI app built for iOS using Swift and SwiftUI. It lever
 1. **Clone the Repository**
 
    `git clone https://github.com/username/GioGPT.git`
+   
 
-	2.	Open in Xcode
-	•	Open GioGPT.xcodeproj in Xcode.
-	3.	Configure Base URL
-	•	In SettingsView, set the base URL for your LLM server instance, which can be updated in-app.
-	4.	Run the App
-	•	Build and run the app in the simulator or on a physical device.
+2.	Open in Xcode
+•	Open GioGPT.xcodeproj in Xcode.
+3.	Configure Base URL
+•	In SettingsView, set the base URL for your LLM server instance, which can be updated in-app.
+4.	Run the App
+•	Build and run the app in the simulator or on a physical device.
 
 Project Structure
 
