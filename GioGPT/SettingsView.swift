@@ -39,11 +39,6 @@ struct SettingsView: View {
                     Text("HTTPS").tag("https")
                 }
                 .pickerStyle(SegmentedPickerStyle())
-                .onChange(of: protocolType) { _, newType in
-                    Task {
-                        try await lmStudioClient.updateBaseURL(newType)
-                    }
-                }
 
                 TextField("Server Address", text: $baseURL)
                     .textInputAutocapitalization(.never)
@@ -111,28 +106,30 @@ struct SettingsView: View {
                     Text("Controls the randomness of the model's responses. Higher values (up to 2) make outputs more random, while lower values (down to 0) make them more focused and deterministic.\n\nDefault: 1.0")
                         .font(.footnote)
                         .foregroundColor(.secondary)
-                    HStack {
-                        Slider(value: Binding(
+                    settingSlider(
+                        title: "Temperature",
+                        value: Binding(
                             get: { settings.temperature ?? 1.0 },
                             set: { settings.temperature = $0 }
-                        ), in: 0...2, step: 0.1)
-                        Text(String(format: "%.1f", settings.temperature ?? 1.0))
-                            .frame(width: 40, alignment: .trailing)
-                    }
+                        ),
+                        range: 0...2,
+                        step: 0.1
+                    )
                 }
                 
                 DisclosureGroup("Top P ") {
                     Text("Nucleus sampling parameter. Limits the model’s token choices to those within the top probability mass. So 0.1 means only the tokens comprising the top 10% probability mass are considered.\n\nDefault: 1.0")
                         .font(.footnote)
                         .foregroundColor(.secondary)
-                    HStack {
-                        Slider(value: Binding(
+                    settingSlider(
+                        title: "Top P",
+                        value: Binding(
                             get: { settings.topP ?? 1.0 },
                             set: { settings.topP = $0 }
-                        ), in: 0...1, step: 0.1)
-                        Text(String(format: "%.1f", settings.topP ?? 1.0))
-                            .frame(width: 40, alignment: .trailing)
-                    }
+                        ),
+                        range: 0...1,
+                        step: 0.1
+                    )
                 }
                 
                 DisclosureGroup("Max Completion Tokens") {
@@ -153,6 +150,7 @@ struct SettingsView: View {
                         get: { settings.stream ?? false },
                         set: { settings.stream = $0 }
                     ))
+                    .tint(.accentColor)
                 }
                 
                 DisclosureGroup("Stop Sequences") {
@@ -221,36 +219,36 @@ struct SettingsView: View {
                     .keyboardType(.numberPad)
                     .textFieldStyle(RoundedBorderTextFieldStyle())
                 }
+            }
                 
-                Section {
-                    Button(action: {
-                        settings.resetToDefaults()
-                    }) {
-                        Text("Reset to Default Settings")
-                            .frame(maxWidth: .infinity, alignment: .center)
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .padding(.top, 8)
+            Section(header: Text("App Settings")) {
+                Button(action: {
+                    settings.resetToDefaults()
+                }) {
+                    Text("Reset to Default Settings")
+                        .frame(maxWidth: .infinity, alignment: .center)
                 }
+                .buttonStyle(.borderedProminent)
+                .padding(8)
+            }
 
-                Section(header: Text("Chat Conversations")) {
-                    if conversations.isEmpty {
-                        Text("No conversations available.")
-                            .foregroundColor(.secondary)
-                    } else {
-                        List {
-                            ForEach(conversations) { conversation in
-                                HStack {
-                                    Text(conversation.title ?? "Untitled Conversation")
-                                        .font(.headline)
-                                    Spacer()
-                                    Text(conversation.date, style: .date)
-                                        .foregroundColor(.secondary)
-                                        .font(.subheadline)
-                                }
+            Section(header: Text("Chat Conversations")) {
+                if conversations.isEmpty {
+                    Text("No conversations available.")
+                        .foregroundColor(.secondary)
+                } else {
+                    List {
+                        ForEach(conversations) { conversation in
+                            HStack {
+                                Text(conversation.title ?? "Untitled Conversation")
+                                    .font(.headline)
+                                Spacer()
+                                Text(conversation.date, style: .date)
+                                    .foregroundColor(.secondary)
+                                    .font(.subheadline)
                             }
-                            .onDelete(perform: deleteConversation)
                         }
+                        .onDelete(perform: deleteConversation)
                     }
                 }
             }
@@ -281,13 +279,37 @@ struct SettingsView: View {
     }
     
     private func applyNewBaseURL() async throws {
-        let formattedBaseURL = "\(protocolType)://\(baseURL):\(port)"
-        do {
-            try await lmStudioClient.updateBaseURL(formattedBaseURL)
-            successfullyConfigured = true
-        } catch {
-            serverSettingsError = error.localizedDescription
+        guard !baseURL.isEmpty, let portInt = Int(port), portInt > 0 else {
+            serverSettingsError = "Invalid server address or port."
+            return
         }
+
+        let constructedURLString = "\(protocolType)://\(baseURL):\(port)"
+        guard let newURL = URL(string: constructedURLString) else {
+            serverSettingsError = "Failed to construct a valid URL."
+            return
+        }
+
+        // Update the lmStudioClient's baseURL with the new value
+        await MainActor.run {
+            lmStudioClient.baseURL = newURL
+            successfullyConfigured = true
+            serverSettingsError = nil
+        }
+    }
+    
+    private func settingSlider(title: String, value: Binding<Double>, range: ClosedRange<Double>, step: Double) -> some View {
+        VStack(alignment: .leading) {
+            Text(title)
+                .font(.subheadline)
+                .foregroundColor(.primary)
+            HStack {
+                Slider(value: value, in: range, step: step)
+                Text(String(format: "%.1f", value.wrappedValue))
+                    .frame(width: 40, alignment: .trailing)
+            }
+        }
+        .padding(.vertical, 4)
     }
     
     private func refreshModels() async {

@@ -2,10 +2,21 @@ import Foundation
 import SwiftData
 
 class LMStudioApiClient: ObservableObject {
+    @Published var errorMessage: String?
+
     var context: ModelContext
     @Published var baseURL: URL {
         didSet {
             UserDefaults.standard.set(baseURL.absoluteString, forKey: "baseURL")
+        }
+    }
+
+    var currentProtocol: String {
+        get {
+            baseURL.scheme ?? "http"
+        }
+        set {
+            updateProtocol(to: newValue)
         }
     }
 
@@ -23,146 +34,69 @@ class LMStudioApiClient: ObservableObject {
         loadLastSelectedModelID()
     }
 
-    func updateBaseURL(_ newBaseURL: String) async throws {
-        if let url = URL(string: newBaseURL) {
-            DispatchQueue.main.async {
-                self.baseURL = url
-            }
-            try await fetchModels()
-        } else {
-            throw URLError(.badURL)
+    enum Endpoint: String {
+        case models = "/v1/models"
+        case chatCompletions = "/v1/chat/completions"
+
+        func url(baseURL: URL) -> URL {
+            baseURL.appendingPathComponent(rawValue)
         }
     }
 
-    func fetchModels() async throws {
-        var request = URLRequest(url: baseURL.appendingPathComponent("/v1/models"))
-        request.httpMethod = "GET"
-
-        do {
-            let (data, response) = try await URLSession.shared.data(for: request)
-
-            // Check the HTTP status code
-            if let httpResponse = response as? HTTPURLResponse, !(200...299).contains(httpResponse.statusCode) {
-                throw NetworkError.serverError(statusCode: httpResponse.statusCode)
-            }
-
-            // Decode the response data
-            let modelsResponse = try JSONDecoder().decode(LMStudioModelsResponse.self, from: data)
-
-            // Update UI on the main thread
-            await MainActor.run {
-                self.models = modelsResponse.data
-                if let lastModelID = selectedModelID, models.contains(where: { $0.id == lastModelID }) {
-                    setLastSelectedModel(byID: lastModelID)
-                } else if let firstModel = models.first {
-                    setLastSelectedModel(byID: firstModel.id)
-                }
-            }
-            
-        } catch let error as URLError {
-            // Explicitly check for SSL error code and throw a specific `sslError`
-            if error.code == .secureConnectionFailed {
-                throw NetworkError.sslError
-            } else {
-                throw handleNetworkError(error)
-            }
-        } catch {
-            // Catch any other unexpected errors
-            throw NetworkError.unexpectedError
-        }
-    }
-
-    func startNewConversation() -> Conversation {
-        let conversation = Conversation()
-        conversation.date = Date()
-        conversation.lastUsed = Date()
-
-        context.insert(conversation)
-        currentConversation = conversation
-        titleGenerated = false
-
-        return conversation
-    }
-
-    @MainActor
-    func addMessage(to conversation: Conversation, text: String, isUser: Bool) -> Message? {
-        let message = Message(text: text, isUser: isUser)
-        message.timestamp = Date()
-        message.conversation = conversation
-
-        context.insert(message)
-        conversation.lastUsed = Date()
-
-        do {
-            try context.save()
-            return message
-        } catch {
-            print("Failed to save message: \(error)")
-            return nil
-        }
-    }
-
-    func deleteConversation(_ conversation: Conversation) {
-        context.delete(conversation)
-
-        if currentConversation === conversation {
-            currentConversation = nil
-        }
-
-        do {
-            try context.save()
-        } catch {
-            print("Failed to delete conversation: \(error)")
-        }
-    }
-
-    func sendChatCompletion(
-        conversation: [Message],
-        modelId: String,
-        topP: Double? = nil,
-        temperature: Double? = nil,
-        maxTokens: Int? = nil,
-        stream: Bool = true,
-        stop: [String]? = nil,
-        presencePenalty: Double? = nil,
-        frequencyPenalty: Double? = nil,
-        logitBias: [String: Double]? = nil,
-        repeatPenalty: Double? = nil,
-        seed: String? = nil
-    ) async throws -> AsyncStream<String> {
-        var request = URLRequest(url: baseURL.appendingPathComponent("/v1/chat/completions"))
-        request.httpMethod = "POST"
+    // Centraliserad metod för icke-streamande förfrågningar
+    private func sendRequest<T: Decodable>(
+        endpoint: Endpoint,
+        method: String = "GET",
+        payload: [String: Any]? = nil,
+        responseType: T.Type
+    ) async throws -> T {
+        var request = URLRequest(url: endpoint.url(baseURL: baseURL))
+        request.httpMethod = method
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
 
-        let messages = conversation.map { ["role": $0.isUser ? "user" : "assistant", "content": $0.text] }
+        if let payload = payload {
+            request.httpBody = try JSONSerialization.data(withJSONObject: payload)
+        }
 
-        var payload: [String: Any] = [
-            "model": modelId,
-            "messages": messages,
-            "stream": stream
-        ]
+        let config = URLSessionConfiguration.default
+        config.timeoutIntervalForRequest = 30
+        config.timeoutIntervalForResource = 60
 
-        if let topP = topP { payload["top_p"] = topP }
-        if let temperature = temperature { payload["temperature"] = temperature }
-        if let maxTokens = maxTokens { payload["max_completion_tokens"] = maxTokens }
-        if let stop = stop { payload["stop"] = stop }
-        if let presencePenalty = presencePenalty { payload["presence_penalty"] = presencePenalty }
-        if let frequencyPenalty = frequencyPenalty { payload["frequency_penalty"] = frequencyPenalty }
-        if let logitBias = logitBias { payload["logit_bias"] = logitBias }
-        if let repeatPenalty = repeatPenalty { payload["repeat_penalty"] = repeatPenalty }
-        if let seed = seed { payload["seed"] = seed }
+        let session = URLSession(configuration: config)
+        let (data, response) = try await session.data(for: request)
 
-        request.httpBody = try JSONSerialization.data(withJSONObject: payload)
+        if let httpResponse = response as? HTTPURLResponse, !(200 ... 299).contains(httpResponse.statusCode) {
+            throw NetworkError.serverError(statusCode: httpResponse.statusCode)
+        }
 
-        // Capture the async part in a Task, yielding results in the non-async AsyncStream.
-        return AsyncStream<String> { continuation in
-            let task = URLSession.shared.dataTask(with: request) { data, _, _ in
-                var lines: [Substring] = []
-                if let data {
-                    lines = String(decoding: data, as: UTF8.self).split(separator: "\n")
+        return try JSONDecoder().decode(responseType, from: data)
+    }
+
+    // Centraliserad metod för streamande förfrågningar
+    private func sendStreamingRequest(
+        endpoint: Endpoint,
+        method: String = "POST",
+        payload: [String: Any]
+    ) -> AsyncStream<String> {
+        AsyncStream<String> { continuation in
+            var request = URLRequest(url: endpoint.url(baseURL: baseURL))
+            request.httpMethod = method
+            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+
+            request.httpBody = try? JSONSerialization.data(withJSONObject: payload)
+
+            let config = URLSessionConfiguration.default
+            config.timeoutIntervalForRequest = 30
+            config.timeoutIntervalForResource = 60
+
+            let session = URLSession(configuration: config)
+            let task = session.dataTask(with: request) { data, _, _ in
+                guard let data else {
+                    continuation.finish()
+                    return
                 }
 
-                // Process response data as chunks for streaming
+                let lines = String(decoding: data, as: UTF8.self).split(separator: "\n")
                 for line in lines {
                     if line.starts(with: "data: ") {
                         let jsonString = line.replacingOccurrences(of: "data: ", with: "")
@@ -181,6 +115,28 @@ class LMStudioApiClient: ObservableObject {
         }
     }
 
+    // Fetch models (icke-streamande)
+    func fetchModels() async throws {
+        do {
+            let modelsResponse: LMStudioModelsResponse = try await sendRequest(
+                endpoint: .models,
+                responseType: LMStudioModelsResponse.self
+            )
+
+            await MainActor.run {
+                self.models = modelsResponse.data
+                if let lastModelID = selectedModelID, models.contains(where: { $0.id == lastModelID }) {
+                    setLastSelectedModel(byID: lastModelID)
+                } else if let firstModel = models.first {
+                    setLastSelectedModel(byID: firstModel.id)
+                }
+            }
+        } catch let error as NetworkError {
+            self.errorMessage = error.localizedDescription
+        }
+    }
+
+    // Skicka chatt-komplettering (icke-streamande)
     func sendChatCompletions(
         conversation: [Message],
         modelId: String,
@@ -194,15 +150,9 @@ class LMStudioApiClient: ObservableObject {
         repeatPenalty: Double? = nil,
         seed: String? = nil
     ) async throws -> String? {
-        var request = URLRequest(url: baseURL.appendingPathComponent("/v1/chat/completions"))
-        request.httpMethod = "POST"
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-
-        let messages = conversation.map { ["role": $0.isUser ? "user" : "assistant", "content": $0.text] }
-
         var payload: [String: Any] = [
             "model": modelId,
-            "messages": messages
+            "messages": conversation.map { ["role": $0.isUser ? "user" : "assistant", "content": $0.text] }
         ]
 
         if let topP = topP { payload["top_p"] = topP }
@@ -215,51 +165,77 @@ class LMStudioApiClient: ObservableObject {
         if let repeatPenalty = repeatPenalty { payload["repeat_penalty"] = repeatPenalty }
         if let seed = seed { payload["seed"] = seed }
 
-        request.httpBody = try JSONSerialization.data(withJSONObject: payload)
+        let chatResponse: LMStudioChatResponse = try await sendRequest(
+            endpoint: .chatCompletions,
+            method: "POST",
+            payload: payload,
+            responseType: LMStudioChatResponse.self
+        )
 
+        return chatResponse.choices.first?.message.content
+    }
+
+    // Skicka chatt-komplettering (streamande)
+    func sendChatCompletion(
+        conversation: [Message],
+        modelId: String,
+        topP: Double? = nil,
+        temperature: Double? = nil,
+        maxTokens: Int? = nil,
+        stream: Bool = true,
+        stop: [String]? = nil,
+        presencePenalty: Double? = nil,
+        frequencyPenalty: Double? = nil,
+        logitBias: [String: Double]? = nil,
+        repeatPenalty: Double? = nil,
+        seed: String? = nil
+    ) -> AsyncStream<String> {
+        var payload: [String: Any] = [
+            "model": modelId,
+            "messages": conversation.map { ["role": $0.isUser ? "user" : "assistant", "content": $0.text] },
+            "stream": stream
+        ]
+
+        if let topP = topP { payload["top_p"] = topP }
+        if let temperature = temperature { payload["temperature"] = temperature }
+        if let maxTokens = maxTokens { payload["max_completion_tokens"] = maxTokens }
+        if let stop = stop { payload["stop"] = stop }
+        if let presencePenalty = presencePenalty { payload["presence_penalty"] = presencePenalty }
+        if let frequencyPenalty = frequencyPenalty { payload["frequency_penalty"] = frequencyPenalty }
+        if let logitBias = logitBias { payload["logit_bias"] = logitBias }
+        if let repeatPenalty = repeatPenalty { payload["repeat_penalty"] = repeatPenalty }
+        if let seed = seed { payload["seed"] = seed }
+
+        return sendStreamingRequest(endpoint: .chatCompletions, method: "POST", payload: payload)
+    }
+    
+    /// Adds a new message to the specified conversation
+    /// - Parameters:
+    ///   - conversation: The `Conversation` object to which the message should be added
+    ///   - text: The text content of the message
+    ///   - isUser: A Boolean indicating if the message is from the user (`true`) or AI (`false`)
+    /// - Returns: The newly created `Message` object, or `nil` if adding failed
+    func addMessage(to conversation: Conversation, text: String, isUser: Bool) -> Message? {
+        guard !text.isEmpty else {
+            errorMessage = "Message text cannot be empty."
+            return nil
+        }
+
+        let newMessage = Message(text: text, isUser: isUser, timestamp: Date())
+        newMessage.conversation = conversation
+        conversation.lastUsed = Date()
+
+        // Insert the message into the SwiftData context
+        context.insert(newMessage)
+
+        // Save the context to persist the changes
         do {
-            let (data, response) = try await URLSession.shared.data(for: request)
-            if let httpResponse = response as? HTTPURLResponse, !(200 ... 299).contains(httpResponse.statusCode) {
-                throw NetworkError.serverError(statusCode: httpResponse.statusCode)
-            }
-
-            let chatResponse = try JSONDecoder().decode(LMStudioChatResponse.self, from: data)
-            guard let messageContent = chatResponse.choices.first?.message.content else {
-                throw NetworkError.unexpectedError
-            }
-
-            return messageContent
-        } catch let error as URLError {
-            throw handleNetworkError(error)
+            try context.save()
+            return newMessage
         } catch {
-            throw NetworkError.unexpectedError
+            errorMessage = "Failed to save the message: \(error.localizedDescription)"
+            return nil
         }
-    }
-
-    // Helper to handle specific network errors
-    private func handleNetworkError(_ error: URLError) -> NetworkError {
-        switch error.code {
-        case .notConnectedToInternet, .cannotFindHost, .cannotConnectToHost:
-            return .connectionError
-        case .secureConnectionFailed, .serverCertificateUntrusted:
-            return .sslError
-        default:
-            return .unexpectedError
-        }
-    }
-
-    func saveLastSelectedModelID(_ modelID: String) {
-        UserDefaults.standard.set(modelID, forKey: lastSelectedModelKey)
-        selectedModelID = modelID
-    }
-
-    private func loadLastSelectedModelID() {
-        selectedModelID = UserDefaults.standard.string(forKey: lastSelectedModelKey)
-    }
-
-    private func setLastSelectedModel(byID modelID: String) {
-        selectedModelID = modelID
-        saveLastSelectedModelID(modelID)
     }
 
     enum NetworkError: LocalizedError {
@@ -267,19 +243,73 @@ class LMStudioApiClient: ObservableObject {
         case connectionError
         case serverError(statusCode: Int)
         case unexpectedError
+        case timeoutError
 
         var errorDescription: String? {
             switch self {
             case .sslError:
-                return "A secure connection could not be established. Please check your HTTPS settings or try again later."
+                return "A secure connection could not be established."
             case .connectionError:
-                return "Unable to connect to the server. Please check your internet connection and try again."
+                return "Unable to connect to the server."
             case .serverError(let statusCode):
-                return "Server returned an error with status code: \(statusCode). Please contact support if this issue persists."
+                return "Server returned an error with status code \(statusCode)."
             case .unexpectedError:
-                return "An unexpected error occurred. Please try again later."
+                return "An unexpected error occurred."
+            case .timeoutError:
+                return "The request timed out."
             }
         }
+    }
+
+    // Ladda senaste valda modell-ID från UserDefaults
+    private func loadLastSelectedModelID() {
+        if let lastSelectedModelID = UserDefaults.standard.string(forKey: lastSelectedModelKey) {
+            selectedModelID = lastSelectedModelID
+        }
+    }
+
+    // Spara det valda modell-ID:t i UserDefaults och uppdatera det lokala tillståndet
+    func setLastSelectedModel(byID modelID: String) {
+        UserDefaults.standard.set(modelID, forKey: lastSelectedModelKey)
+        selectedModelID = modelID
+    }
+
+    /// Updates the protocol for the base URL
+    func updateProtocol(to scheme: String) {
+        guard scheme == "http" || scheme == "https" else {
+            print("Invalid scheme: \(scheme). Use 'http' or 'https'.")
+            return
+        }
+
+        let currentURLString = baseURL.absoluteString
+        if let updatedURL = URL(string: currentURLString.replacingOccurrences(of: baseURL.scheme ?? "", with: scheme)) {
+            baseURL = updatedURL
+        }
+    }
+    
+    func startNewConversation() -> Conversation {
+        let conversation = Conversation()
+        conversation.date = Date()
+        conversation.lastUsed = Date()
+
+        // Sätt titel som nil för att indikera att den behöver genereras
+        conversation.title = nil
+        
+        // Lägg till konversationen i SwiftData-kontexten
+        context.insert(conversation)
+
+        // Uppdatera den aktuella konversationen
+        currentConversation = conversation
+
+        // Spara kontexten
+        do {
+            try context.save()
+        } catch {
+            print("Failed to save new conversation: \(error)")
+        }
+
+        // Returnera den nyskapade konversationen
+        return conversation
     }
 }
 

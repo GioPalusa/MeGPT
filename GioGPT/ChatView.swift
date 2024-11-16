@@ -8,7 +8,6 @@ struct ChatView: View {
     @Environment(\.modelContext) private var context
     @State private var prompt = ""
     @State private var isLoading = false
-    @State private var errorMessage: String?
     @State private var isShowingSettings = false
     @State private var isInitialAppear = true
     @Environment(\.colorScheme) var colorScheme
@@ -18,48 +17,11 @@ struct ChatView: View {
     var body: some View {
         NavigationStack {
             VStack {
-                HStack {
-                    Spacer()
-                    
-                    // Settings button with dropdown menu
-                    Menu {
-                        if !savedConversations.isEmpty {
-                            Menu("Load Conversation") {
-                                ForEach(savedConversations) { conversationMetadata in
-                                    Button(action: {
-                                        lmStudioClient.currentConversation = conversationMetadata
-                                    }) {
-                                        if let title = conversationMetadata.title {
-                                            Text(title)
-                                        } else {
-                                            Text("Conversation on \(conversationMetadata.date.formatted(date: .abbreviated, time: .shortened))")
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                        
-                        Button("New Conversation") {
-                            lmStudioClient.currentConversation = lmStudioClient.startNewConversation()
-                        }
-                        
-                        Button("Settings") {
-                            isShowingSettings.toggle()
-                        }
-                    } label: {
-                        Image(systemName: "gearshape.fill")
-                            .font(.title2)
-                            .foregroundColor(.primary)
-                    }
-                    .padding()
-                }
-                
                 ScrollViewReader { scrollViewProxy in
                     ScrollView {
                         VStack(alignment: .leading, spacing: 10) {
-                            if let conversation = lmStudioClient.currentConversation, !conversation.messages.isEmpty {
-                                // Show messages if conversation is not empty
-                                ForEach(conversation.messages.sorted(by: { $0.timestamp < $1.timestamp }), id: \.id) { message in
+                            if let messages = lmStudioClient.currentConversation?.messages, !messages.isEmpty {
+                                ForEach(messages.sorted(by: { $0.timestamp < $1.timestamp }), id: \.id) { message in
                                     HStack {
                                         if message.isUser {
                                             Spacer()
@@ -78,15 +40,14 @@ struct ChatView: View {
                                     .id(message.id)
                                 }
                             } else {
-                                // Display welcome message if no conversation or it's empty
                                 Text("Welcome to Gio GPT")
                                     .font(.headline)
                                     .foregroundColor(.primary)
                                     .multilineTextAlignment(.center)
                                     .padding()
                             }
-                            
-                            if let errorMessage = errorMessage {
+                    
+                            if let errorMessage = lmStudioClient.errorMessage {
                                 HStack {
                                     Image(systemName: "exclamationmark.triangle.fill")
                                         .foregroundColor(.red)
@@ -96,7 +57,7 @@ struct ChatView: View {
                                 }
                                 .padding()
                             }
-                            
+                    
                             if isLoading {
                                 ProgressView()
                                     .progressViewStyle(.circular)
@@ -110,12 +71,6 @@ struct ChatView: View {
                                 scrollToLastMessage(scrollViewProxy: scrollViewProxy, lastMessage: lastMessage)
                             }
                         }
-                        .background(
-                            EmptyView()
-                                .navigationDestination(isPresented: $isShowingSettings) {
-                                    SettingsView(lmStudioClient: lmStudioClient)
-                                }
-                        )
                     }
                     
                     HStack {
@@ -129,7 +84,7 @@ struct ChatView: View {
                             }
                             .background(.clear)
                             .cornerRadius(8)
-                        
+                    
                         Button(action: {
                             Task {
                                 await sendMessage(scrollViewProxy: scrollViewProxy)
@@ -155,36 +110,68 @@ struct ChatView: View {
                         do {
                             try await lmStudioClient.fetchModels()
                             await MainActor.run {
-                                if let lastModelID = lmStudioClient.selectedModelID,
-                                   let model = lmStudioClient.models.first(where: { $0.id == lastModelID })
-                                {
-                                    lmStudioClient.selectedModelID = model.id
-                                } else if let firstModelID = lmStudioClient.models.first?.id {
+                                if let firstModelID = lmStudioClient.models.first?.id {
                                     lmStudioClient.selectedModelID = firstModelID
-                                    lmStudioClient.saveLastSelectedModelID(firstModelID)
+                                    lmStudioClient.setLastSelectedModel(byID: firstModelID)
                                 }
                             }
                         } catch {
-                            print("Error fetching models: \(error)")
+                            lmStudioClient.errorMessage = "Error fetching models: \(error)"
                         }
-                        
+                            
                         if let lastConversation = savedConversations.first {
                             lmStudioClient.currentConversation = lastConversation
                         } else {
                             lmStudioClient.currentConversation = lmStudioClient.startNewConversation()
                         }
-                        
+                            
                         prepareHaptics()
                         isInitialAppear = false
                     }
                 }
+            }
+            .toolbar {
+                ToolbarItemGroup(placement: .navigationBarTrailing) {
+                    // Settings button with dropdown menu
+                    Menu {
+                        if !savedConversations.isEmpty {
+                            Menu("Load Conversation") {
+                                ForEach(savedConversations) { conversationMetadata in
+                                    Button(action: {
+                                        lmStudioClient.currentConversation = conversationMetadata
+                                    }) {
+                                        if let title = conversationMetadata.title {
+                                            Text(title)
+                                        } else {
+                                            Text("Conversation on \(conversationMetadata.date.formatted(date: .abbreviated, time: .shortened))")
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        Button("New Conversation") {
+                            lmStudioClient.currentConversation = lmStudioClient.startNewConversation()
+                        }
+
+                        Button("Settings") {
+                            isShowingSettings.toggle()
+                        }
+                    } label: {
+                        Image(systemName: "gearshape")
+                            .foregroundColor(.primary)
+                    }
+                }
+            }
+            .navigationDestination(isPresented: $isShowingSettings) {
+                SettingsView(lmStudioClient: lmStudioClient)
             }
         }
     }
 
     private func sendMessage(scrollViewProxy: ScrollViewProxy) async {
         guard let selectedModelID = lmStudioClient.selectedModelID else {
-            errorMessage = "Please select a model"
+            lmStudioClient.errorMessage = "Please select a model"
             return
         }
 
@@ -199,9 +186,10 @@ struct ChatView: View {
         }
 
         guard let currentConversation = lmStudioClient.currentConversation else {
-            errorMessage = "Error creating conversation"
+            lmStudioClient.errorMessage = "Error creating conversation"
             return
         }
+        
         if let userMessage = lmStudioClient.addMessage(to: currentConversation, text: userPrompt, isUser: true) {
             scrollToLastMessage(scrollViewProxy: scrollViewProxy, lastMessage: userMessage)
                 
@@ -262,7 +250,7 @@ struct ChatView: View {
             }
         } catch {
             await MainActor.run {
-                errorMessage = "Failed to get a response 📣 🆘 \(error.localizedDescription)"
+                lmStudioClient.errorMessage = "Failed to get a response 📣 🆘 \(error.localizedDescription)"
             }
         }
         isLoading = false
