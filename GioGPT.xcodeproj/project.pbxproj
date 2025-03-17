@@ -11,7 +11,7 @@
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
-		AC7E336E2CDF8ADD007A3DB6 /* Exceptions for "GioGPT" folder in "GioGPT" target */ = {
+		08F71F672D88C2A200C25D5F /* Exceptions for "GioGPT" folder in "GioGPT" target */ = {
 			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
 			membershipExceptions = (
 				Info.plist,
@@ -24,7 +24,7 @@
 		AC7E33552CDF7D52007A3DB6 /* GioGPT */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
 			exceptions = (
-				AC7E336E2CDF8ADD007A3DB6 /* Exceptions for "GioGPT" folder in "GioGPT" target */,
+				08F71F672D88C2A200C25D5F /* Exceptions for "GioGPT" folder in "GioGPT" target */,
 			);
 			path = GioGPT;
 			sourceTree = "<group>";

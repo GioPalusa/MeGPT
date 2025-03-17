@@ -15,7 +15,7 @@ extension LMStudioApiClient {
     func generateConversationTitle(conversation: [Message], modelId: String, context: ModelContext) async throws -> String {
         // Adjusted prompt to request a concise title
         let titlePrompt = """
-        Generate a concise, relevant title (max 6 words) for this conversation based on the main topic. Never answer the user, just summarize what the user wants from this text: \(conversation.first?.text ?? ""). Only respond with the title, no other text.
+        Make a suiting book title for this text: \(conversation.first?.text ?? ""). Only respond with the title, no other text.
         """
         
         // Request the title from the model

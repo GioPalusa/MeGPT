@@ -5,19 +5,16 @@
 //  Created by Giovanni Palusa on 2024-11-09.
 //
 
-
 import Foundation
 
 /// Representerar en modell i LM Studio
 struct LMStudioModel: Identifiable, Codable, Hashable {
     let id: String
     let object: String
-    let ownedBy: String
-    
+
     private enum CodingKeys: String, CodingKey {
         case id
         case object
-        case ownedBy = "owned_by"
     }
 }
 
@@ -30,6 +27,7 @@ struct LMStudioModelsResponse: Codable {
 /// Representerar ett enskilt svar från chat completion
 struct LMStudioChatChoice: Codable {
     let message: LMStudioMessage
+    let finishReason: String?
 }
 
 /// Representerar hela svaret från /v1/chat/completions endpoint
@@ -41,4 +39,10 @@ struct LMStudioChatResponse: Codable {
 struct LMStudioMessage: Codable {
     let role: String
     let content: String
+    let reasoningContent: String?
+
+    enum CodingKeys: String, CodingKey {
+        case role, content
+        case reasoningContent = "reasoning_content"
+    }
 }

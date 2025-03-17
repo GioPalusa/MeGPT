@@ -59,8 +59,8 @@ class LMStudioApiClient: ObservableObject {
         }
 
         let config = URLSessionConfiguration.default
-        config.timeoutIntervalForRequest = 30
-        config.timeoutIntervalForResource = 60
+        config.timeoutIntervalForRequest = 300
+        config.timeoutIntervalForResource = 600
 
         let session = URLSession(configuration: config)
         let (data, response) = try await session.data(for: request)
@@ -79,39 +79,41 @@ class LMStudioApiClient: ObservableObject {
         payload: [String: Any]
     ) -> AsyncStream<String> {
         AsyncStream<String> { continuation in
-            var request = URLRequest(url: endpoint.url(baseURL: baseURL))
-            request.httpMethod = method
-            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            Task {
+                var request = URLRequest(url: endpoint.url(baseURL: baseURL))
+                request.httpMethod = method
+                request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+                request.setValue("text/event-stream", forHTTPHeaderField: "Accept")
+                request.setValue("keep-alive", forHTTPHeaderField: "Connection")
+                request.setValue("identity", forHTTPHeaderField: "Accept-Encoding")
 
-            request.httpBody = try? JSONSerialization.data(withJSONObject: payload)
+                request.httpBody = try? JSONSerialization.data(withJSONObject: payload)
 
-            let config = URLSessionConfiguration.default
-            config.timeoutIntervalForRequest = 30
-            config.timeoutIntervalForResource = 60
+                let config = URLSessionConfiguration.ephemeral
+                config.timeoutIntervalForRequest = .infinity
+                config.timeoutIntervalForResource = .infinity
 
-            let session = URLSession(configuration: config)
-            let task = session.dataTask(with: request) { data, _, _ in
-                guard let data else {
-                    continuation.finish()
-                    return
-                }
+                let session = URLSession(configuration: config)
 
-                let lines = String(decoding: data, as: UTF8.self).split(separator: "\n")
-                for line in lines {
-                    if line.starts(with: "data: ") {
-                        let jsonString = line.replacingOccurrences(of: "data: ", with: "")
-                        if let jsonData = jsonString.data(using: .utf8),
-                           let chunk = try? JSONDecoder().decode(ChatCompletionChunk.self, from: jsonData),
-                           let content = chunk.choices.first?.delta.content
-                        {
-                            continuation.yield(content)
+                do {
+                    let (bytes, _) = try await session.bytes(for: request)
+
+                    for try await line in bytes.lines {
+                        if line.starts(with: "data: ") {
+                            let jsonString = line.replacingOccurrences(of: "data: ", with: "")
+                            if let jsonData = jsonString.data(using: .utf8),
+                               let chunk = try? JSONDecoder().decode(ChatCompletionChunk.self, from: jsonData),
+                               let content = chunk.choices.first?.delta.content {
+                                continuation.yield(content)
+                            }
                         }
                     }
+                } catch {
+                    print("Streaming request failed: \(error)")
                 }
+                
                 continuation.finish()
             }
-
-            task.resume()
         }
     }
 
@@ -208,7 +210,7 @@ class LMStudioApiClient: ObservableObject {
 
         return sendStreamingRequest(endpoint: .chatCompletions, method: "POST", payload: payload)
     }
-    
+
     /// Adds a new message to the specified conversation
     /// - Parameters:
     ///   - conversation: The `Conversation` object to which the message should be added
@@ -286,7 +288,7 @@ class LMStudioApiClient: ObservableObject {
             baseURL = updatedURL
         }
     }
-    
+
     func startNewConversation() -> Conversation {
         let conversation = Conversation()
         conversation.date = Date()
@@ -294,7 +296,7 @@ class LMStudioApiClient: ObservableObject {
 
         // Sätt titel som nil för att indikera att den behöver genereras
         conversation.title = nil
-        
+
         // Lägg till konversationen i SwiftData-kontexten
         context.insert(conversation)
 
@@ -322,13 +324,32 @@ struct ConversationMetadata: Identifiable, Codable {
 
 /// A response chunk for a streaming chat completion
 struct ChatCompletionChunk: Codable {
-    struct Choice: Codable {
-        struct Delta: Codable {
-            let content: String?
-        }
+    let id: String
+    let object: String
+    let created: Int
+    let model: String
+    let systemFingerprint: String
+    let choices: [Choice]
 
-        let delta: Delta
+    enum CodingKeys: String, CodingKey {
+        case id, object, created, model, choices
+        case systemFingerprint = "system_fingerprint"
     }
 
-    let choices: [Choice]
+    struct Choice: Codable {
+        let finishReason: String?
+        let delta: Delta
+        let logprobs: String?
+        let index: Int
+
+        enum CodingKeys: String, CodingKey {
+            case finishReason = "finish_reason"
+            case delta, logprobs, index
+        }
+    }
+
+    struct Delta: Codable {
+        let content: String?
+        let role: String
+    }
 }

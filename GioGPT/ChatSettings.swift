@@ -64,6 +64,30 @@ class ChatSettings: ObservableObject {
         }
     }
     
+    @Published var appTintColor: Color = .accentColor {
+        didSet {
+            UserDefaults.standard.set(try? NSKeyedArchiver.archivedData(withRootObject: UIColor(appTintColor), requiringSecureCoding: false), forKey: "appTintColor")
+        }
+    }
+    
+    @Published var userBubbleColor: Color = .init(red: 0.5, green: 0.0, blue: 0.0) {
+        didSet {
+            UserDefaults.standard.set(try? NSKeyedArchiver.archivedData(withRootObject: UIColor(userBubbleColor), requiringSecureCoding: false), forKey: "userBubbleColor")
+        }
+    }
+    
+    @Published var aiBubbleColor: Color = .clear {
+        didSet {
+            UserDefaults.standard.set(try? NSKeyedArchiver.archivedData(withRootObject: UIColor(aiBubbleColor), requiringSecureCoding: false), forKey: "aiBubbleColor")
+        }
+    }
+    
+    @Published var showAIBubble: Bool = false {
+        didSet {
+            UserDefaults.standard.set(showAIBubble, forKey: "showAIBubble")
+        }
+    }
+    
     init() {
         // Initialize with values from UserDefaults, or default if unset
         self.temperature = UserDefaults.standard.object(forKey: "temperature") as? Double ?? 1.0
@@ -75,6 +99,23 @@ class ChatSettings: ObservableObject {
         self.seed = UserDefaults.standard.string(forKey: "seed")
         self.stopSequences = UserDefaults.standard.string(forKey: "stopSequences")
         self.stream = UserDefaults.standard.object(forKey: "stream") as? Bool ?? true
+        
+        if let tintData = UserDefaults.standard.data(forKey: "appTintColor"),
+           let tintColor = try? NSKeyedUnarchiver.unarchivedObject(ofClass: UIColor.self, from: tintData) {
+            self.appTintColor = Color(tintColor)
+        }
+                
+        if let userBubbleData = UserDefaults.standard.data(forKey: "userBubbleColor"),
+           let userBubbleColor = try? NSKeyedUnarchiver.unarchivedObject(ofClass: UIColor.self, from: userBubbleData) {
+            self.userBubbleColor = Color(userBubbleColor)
+        }
+                
+        if let aiBubbleData = UserDefaults.standard.data(forKey: "aiBubbleColor"),
+           let aiBubbleColor = try? NSKeyedUnarchiver.unarchivedObject(ofClass: UIColor.self, from: aiBubbleData) {
+            self.aiBubbleColor = Color(aiBubbleColor)
+        }
+                
+        self.showAIBubble = UserDefaults.standard.bool(forKey: "showAIBubble")
     }
     
     /// Resets all settings to their default values.

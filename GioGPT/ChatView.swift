@@ -26,14 +26,22 @@ struct ChatView: View {
                                         if message.isUser {
                                             Spacer()
                                             Text(message.text)
+                                                .textSelection(.enabled)
                                                 .padding(10)
-                                                .background(Color(red: 0.5, green: 0.0, blue: 0.0))
+                                                .background(settings.userBubbleColor)
                                                 .cornerRadius(8)
                                                 .foregroundColor(.white)
-                                                .textSelection(.enabled)
                                         } else {
-                                            Text(message.text)
-                                                .textSelection(.enabled)
+                                            if settings.showAIBubble {
+                                                Text(message.text)
+                                                    .padding(10)
+                                                    .background(settings.aiBubbleColor)
+                                                    .cornerRadius(8)
+                                                    .foregroundColor(.primary)
+                                            } else {
+                                                Text(message.text)
+                                                    .textSelection(.enabled)
+                                            }
                                             Spacer()
                                         }
                                     }
@@ -72,6 +80,7 @@ struct ChatView: View {
                             }
                         }
                     }
+                    .simultaneousGesture(DragGesture().onChanged { _ in hideKeyboard() })
                     
                     HStack {
                         TextField("What do you need?", text: $prompt)
@@ -102,6 +111,7 @@ struct ChatView: View {
                     .cornerRadius(8)
                 }
             }
+            .gesture(TapGesture().onEnded { hideKeyboard() })
             .navigationTitle(lmStudioClient.currentConversation?.title ?? "")
             .navigationBarTitleDisplayMode(.inline)
             .onAppear {
@@ -174,7 +184,7 @@ struct ChatView: View {
             lmStudioClient.errorMessage = "Please select a model"
             return
         }
-
+        lmStudioClient.errorMessage = nil
         let userPrompt = prompt
         prompt = ""
         var accumulatedContent = ""
@@ -210,7 +220,7 @@ struct ChatView: View {
 
         do {
             if settings.stream == true {
-                let stream = try await lmStudioClient.sendChatCompletion(
+                let stream = lmStudioClient.sendChatCompletion(
                     conversation: lmStudioClient.currentConversation!.messages,
                     modelId: selectedModelID,
                     topP: settings.topP,
@@ -262,5 +272,9 @@ struct ChatView: View {
                 scrollViewProxy.scrollTo(lastMessage.id, anchor: .bottom)
             }
         }
+    }
+    
+    private func hideKeyboard() {
+        UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
     }
 }

@@ -133,13 +133,13 @@ struct SettingsView: View {
                 }
                 
                 DisclosureGroup("Max Completion Tokens") {
-                    Text("Sets the upper bound for the number of tokens that can be generated for a completion, including visible output tokens and reasoning tokens.\n\nDefault: 100")
+                    Text("Sets the upper bound for the number of tokens that can be generated for a completion, including visible output tokens and reasoning tokens.\n\nDefault: 1024")
                         .font(.footnote)
                         .foregroundColor(.secondary)
-                    Stepper("Max Tokens: \(settings.maxTokens ?? 100)", value: Binding(
-                        get: { settings.maxTokens ?? 100 },
+                    Stepper("Max Tokens: \(settings.maxTokens ?? 1024)", value: Binding(
+                        get: { settings.maxTokens ?? 1024 },
                         set: { settings.maxTokens = $0 }
-                    ), in: 1...1000)
+                    ), in: 1...2048)
                 }
                 
                 DisclosureGroup("Stream Response") {
@@ -222,6 +222,25 @@ struct SettingsView: View {
             }
                 
             Section(header: Text("App Settings")) {
+                ColorPicker("App Tint Color", selection: $settings.appTintColor)
+                        .onChange(of: settings.appTintColor) { _, _ in
+                            // Uppdatera global accentfärg
+                            UITabBar.appearance().tintColor = UIColor(settings.appTintColor)
+                        }
+                    
+                    ColorPicker("Your Message Bubble Color", selection: $settings.userBubbleColor)
+
+                    Toggle("Show Bubbles for AI Responses", isOn: $settings.showAIBubble)
+                        .onChange(of: settings.showAIBubble) { _, _ in
+                            if !settings.showAIBubble {
+                                settings.aiBubbleColor = .clear
+                            }
+                        }
+
+                    if settings.showAIBubble {
+                        ColorPicker("AI Response Bubble Color", selection: $settings.aiBubbleColor)
+                    }
+                
                 Button(action: {
                     settings.resetToDefaults()
                 }) {
