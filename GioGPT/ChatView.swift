@@ -26,7 +26,8 @@ struct ChatView: View {
                                     HStack {
                                         if message.isUser {
                                             Spacer()
-                                            Text(message.text)
+
+                                            Text(LocalizedStringKey(message.text))
                                                 .textSelection(.enabled)
                                                 .padding(10)
                                                 .background(settings.userBubbleColor)
@@ -34,24 +35,26 @@ struct ChatView: View {
                                                 .foregroundColor(.white)
                                         } else {
                                             if message.text.starts(with: "[Reasoning]:") {
-                                                Text(message.text)
-                                                    .font(.footnote)
-                                                    .italic()
-                                                    .foregroundColor(.gray)
-                                                    .fixedSize(horizontal: false, vertical: true)
+                                                DisclosureGroup("Reasoning") {
+                                                    // Remove the prefix before displaying the text inside the disclosure group
+                                                    Text(LocalizedStringKey(message.text.replacingOccurrences(of: "[Reasoning]: ", with: "")))
+                                                        .font(.footnote)
+                                                        .italic()
+                                                        .foregroundColor(.gray)
+                                                        .fixedSize(horizontal: false, vertical: true)
+                                                }
                                             } else {
                                                 if settings.showAIBubble {
-                                                    Text(message.text)
+                                                    Text(LocalizedStringKey(message.text))
                                                         .padding(10)
                                                         .background(settings.aiBubbleColor)
                                                         .cornerRadius(8)
                                                         .foregroundColor(.primary)
                                                 } else {
-                                                    Text(message.text)
+                                                    Text(LocalizedStringKey(message.text))
                                                         .textSelection(.enabled)
                                                 }
                                             }
-                                            Spacer()
                                         }
                                     }
                                     .id(message.id)
@@ -214,16 +217,16 @@ struct ChatView: View {
             let newConversation = lmStudioClient.startNewConversation()
             lmStudioClient.currentConversation = newConversation
         }
-        
+
         guard let currentConversation = lmStudioClient.currentConversation else {
             lmStudioClient.errorMessage = "Error creating conversation"
             return
         }
-        
+
         // Add the user's message to the conversation and scroll to it
         if let userMessage = lmStudioClient.addMessage(to: currentConversation, text: userPrompt, isUser: true) {
             scrollToLastMessage(scrollViewProxy: scrollViewProxy, lastMessage: userMessage)
-            
+
             // Generate a title if needed
             if lmStudioClient.currentConversation?.title == nil {
                 Task {
@@ -237,7 +240,7 @@ struct ChatView: View {
                 }
             }
         }
-        
+
         isLoading = true
 
         do {
@@ -251,7 +254,7 @@ struct ChatView: View {
                     maxTokens: settings.maxTokens,
                     stream: true
                 )
-                
+
                 // Process the reasoning stream concurrently by accumulating reasoning text into a single message
                 var accumulatedReasoning = ""
                 var aiReasoningMessage: Message?
@@ -259,31 +262,35 @@ struct ChatView: View {
                     for await reasoning in reasoningStream {
                         accumulatedReasoning += reasoning
                         try await MainActor.run {
-                            if aiReasoningMessage == nil {
-                                aiReasoningMessage = lmStudioClient.addMessage(to: currentConversation, text: accumulatedReasoning, isUser: false)
-                            } else {
-                                aiReasoningMessage?.text = accumulatedReasoning
-                                try context.save()
-                            }
-                            if let lastMessage = currentConversation.messages.last {
-                                scrollToLastMessage(scrollViewProxy: scrollViewProxy, lastMessage: lastMessage)
+                            try withAnimation(.easeIn) {
+                                if aiReasoningMessage == nil {
+                                    aiReasoningMessage = lmStudioClient.addMessage(to: currentConversation, text: accumulatedReasoning, isUser: false)
+                                } else {
+                                    aiReasoningMessage?.text = accumulatedReasoning
+                                    try context.save()
+                                }
+                                if let lastMessage = currentConversation.messages.last {
+                                    scrollToLastMessage(scrollViewProxy: scrollViewProxy, lastMessage: lastMessage)
+                                }
                             }
                         }
                     }
                 }
-                
+
                 // Process the main content stream sequentially and accumulate the content
                 for try await content in contentStream {
                     accumulatedContent += content
                     try await MainActor.run {
-                        if aiResponseMessage == nil {
-                            aiResponseMessage = lmStudioClient.addMessage(to: currentConversation, text: accumulatedContent, isUser: false)
-                        } else {
-                            aiResponseMessage?.text = accumulatedContent
-                            try context.save()
-                        }
-                        if let lastMessage = aiResponseMessage {
-                            scrollToLastMessage(scrollViewProxy: scrollViewProxy, lastMessage: lastMessage)
+                        try withAnimation(.easeIn) {
+                            if aiResponseMessage == nil {
+                                aiResponseMessage = lmStudioClient.addMessage(to: currentConversation, text: accumulatedContent, isUser: false)
+                            } else {
+                                aiResponseMessage?.text = accumulatedContent
+                                try context.save()
+                            }
+                            if let lastMessage = aiResponseMessage {
+                                scrollToLastMessage(scrollViewProxy: scrollViewProxy, lastMessage: lastMessage)
+                            }
                         }
                     }
                 }
@@ -296,7 +303,7 @@ struct ChatView: View {
                     temperature: settings.temperature,
                     maxTokens: settings.maxTokens
                 ) else { return }
-                
+
                 if let finalMessage = lmStudioClient.addMessage(to: currentConversation, text: responseContent, isUser: false) {
                     scrollToLastMessage(scrollViewProxy: scrollViewProxy, lastMessage: finalMessage)
                 }
@@ -311,9 +318,7 @@ struct ChatView: View {
 
     private func scrollToLastMessage(scrollViewProxy: ScrollViewProxy, lastMessage: Message) {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-            withAnimation {
-                scrollViewProxy.scrollTo(lastMessage.id, anchor: .bottom)
-            }
+            scrollViewProxy.scrollTo(lastMessage.id, anchor: .bottom)
         }
     }
 
