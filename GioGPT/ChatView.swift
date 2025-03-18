@@ -1,4 +1,5 @@
 import CoreHaptics
+import Lottie
 import SwiftData
 import SwiftUI
 
@@ -79,10 +80,10 @@ struct ChatView: View {
                             }
 
                             if isLoading {
-                                ProgressView()
-                                    .progressViewStyle(.circular)
-                                    .padding()
-                                    .frame(maxWidth: .infinity, alignment: .center)
+                                LottieView(animation: .named("generation"))
+                                    .looping()
+                                    .resizable()
+                                    .frame(height: 40)
                             }
                         }
                         .padding()

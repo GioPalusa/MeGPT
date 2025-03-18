@@ -5,6 +5,7 @@
 //  Created by Giovanni Palusa on 2024-11-09.
 //
 
+import Lottie
 import SwiftData
 import SwiftUI
 
@@ -86,7 +87,10 @@ struct SettingsView: View {
                     }
                 }) {
                     if isRefreshing {
-                        ProgressView()
+                        LottieView(animation: .named("generation"))
+                            .looping()
+                            .resizable()
+                            .frame(height: 40)
                     } else {
                         Text("Refresh")
                     }
@@ -136,10 +140,23 @@ struct SettingsView: View {
                     Text("Sets the upper bound for the number of tokens that can be generated for a completion, including visible output tokens and reasoning tokens.\n\nDefault: 1024")
                         .font(.footnote)
                         .foregroundColor(.secondary)
-                    Stepper("Max Tokens: \(settings.maxTokens ?? 1024)", value: Binding(
-                        get: { settings.maxTokens ?? 1024 },
-                        set: { settings.maxTokens = $0 }
-                    ), in: 1...2048)
+                    HStack {
+                        Text("Max Tokens")
+                        Spacer()
+                        TextField("1024", text: Binding(
+                            get: { String(settings.maxTokens ?? 1024) },
+                            set: { newValue in
+                                // Convert the input string to an integer, if possible.
+                                if let value = Int(newValue) {
+                                    // Enforce a maximum value of 4096 tokens.
+                                    settings.maxTokens = min(value, 4096)
+                                }
+                            }
+                        ))
+                        .keyboardType(.numberPad)
+                        .textFieldStyle(RoundedBorderTextFieldStyle())
+                        .frame(width: 80)
+                    }
                 }
                 
                 DisclosureGroup("Stream Response") {
@@ -223,23 +240,23 @@ struct SettingsView: View {
                 
             Section(header: Text("App Settings")) {
                 ColorPicker("App Tint Color", selection: $settings.appTintColor)
-                        .onChange(of: settings.appTintColor) { _, _ in
-                            // Uppdatera global accentfärg
-                            UITabBar.appearance().tintColor = UIColor(settings.appTintColor)
-                        }
-                    
-                    ColorPicker("Your Message Bubble Color", selection: $settings.userBubbleColor)
-
-                    Toggle("Show Bubbles for AI Responses", isOn: $settings.showAIBubble)
-                        .onChange(of: settings.showAIBubble) { _, _ in
-                            if !settings.showAIBubble {
-                                settings.aiBubbleColor = .clear
-                            }
-                        }
-
-                    if settings.showAIBubble {
-                        ColorPicker("AI Response Bubble Color", selection: $settings.aiBubbleColor)
+                    .onChange(of: settings.appTintColor) { _, _ in
+                        // Uppdatera global accentfärg
+                        UITabBar.appearance().tintColor = UIColor(settings.appTintColor)
                     }
+                    
+                ColorPicker("Your Message Bubble Color", selection: $settings.userBubbleColor)
+
+                Toggle("Show Bubbles for AI Responses", isOn: $settings.showAIBubble)
+                    .onChange(of: settings.showAIBubble) { _, _ in
+                        if !settings.showAIBubble {
+                            settings.aiBubbleColor = .clear
+                        }
+                    }
+
+                if settings.showAIBubble {
+                    ColorPicker("AI Response Bubble Color", selection: $settings.aiBubbleColor)
+                }
                 
                 Button(action: {
                     settings.resetToDefaults()
