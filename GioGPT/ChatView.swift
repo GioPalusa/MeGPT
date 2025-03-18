@@ -12,6 +12,7 @@ struct ChatView: View {
     @State private var isShowingSettings = false
     @State private var isInitialAppear = true
     @State private var isKeyboardVisible = false
+    @State private var generationTask: Task<Void, Never>? = nil
     @Environment(\.colorScheme) var colorScheme
 
     @Query(sort: \Conversation.lastUsed, order: .reverse) private var savedConversations: [Conversation]
@@ -95,29 +96,47 @@ struct ChatView: View {
                     }
                     .simultaneousGesture(DragGesture().onChanged { _ in hideKeyboard() })
 
+                    // Text input and action button
                     HStack {
                         TextField("What do you need?", text: $prompt)
                             .padding()
                             .submitLabel(.send)
                             .onSubmit {
-                                Task {
-                                    await sendMessage(scrollViewProxy: scrollViewProxy)
+                                if !isLoading {
+                                    generationTask = Task {
+                                        await sendMessage(scrollViewProxy: scrollViewProxy)
+                                    }
                                 }
                             }
+                            .disabled(isLoading) // Disable text field during generation
                             .background(.clear)
                             .cornerRadius(8)
-
-                        Button(action: {
-                            Task {
-                                await sendMessage(scrollViewProxy: scrollViewProxy)
+                        
+                        if isLoading {
+                            // Show a stop button when generation is in progress
+                            Button(action: {
+                                generationTask?.cancel()
+                                isLoading = false
+                            }) {
+                                Image(systemName: "stop.fill")
+                                    .font(.system(size: 30))
+                                    .foregroundColor(.primary)
                             }
-                        }) {
-                            Image(systemName: "arrow.up.circle.fill")
-                                .font(.system(size: 30))
-                                .foregroundColor(isLoading ? Color.gray : .primary)
+                            .buttonStyle(.plain)
+                        } else {
+                            // Show the send button when not generating
+                            Button(action: {
+                                generationTask = Task {
+                                    await sendMessage(scrollViewProxy: scrollViewProxy)
+                                }
+                            }) {
+                                Image(systemName: "arrow.up.circle.fill")
+                                    .font(.system(size: 30))
+                                    .foregroundColor(prompt.isEmpty ? Color.gray : .primary)
+                            }
+                            .buttonStyle(.plain)
+                            .disabled(prompt.isEmpty)
                         }
-                        .buttonStyle(.plain)
-                        .disabled(isLoading || prompt.isEmpty)
                     }
                     .padding()
                     .background(Color.gray.opacity(0.1))
@@ -243,6 +262,14 @@ struct ChatView: View {
         }
 
         isLoading = true
+        defer {
+            Task {
+                await MainActor.run {
+                    isLoading = false
+                    generationTask = nil
+                }
+            }
+        }
 
         do {
             if settings.stream == true {
@@ -261,6 +288,7 @@ struct ChatView: View {
                 var aiReasoningMessage: Message?
                 Task {
                     for await reasoning in reasoningStream {
+                        if Task.isCancelled { break }  // Check for cancellation
                         accumulatedReasoning += reasoning
                         try await MainActor.run {
                             try withAnimation(.easeIn) {
@@ -280,6 +308,7 @@ struct ChatView: View {
 
                 // Process the main content stream sequentially and accumulate the content
                 for try await content in contentStream {
+                    if Task.isCancelled { break }  // Check for cancellation
                     accumulatedContent += content
                     try await MainActor.run {
                         try withAnimation(.easeIn) {
@@ -310,8 +339,10 @@ struct ChatView: View {
                 }
             }
         } catch {
-            await MainActor.run {
-                lmStudioClient.errorMessage = "Failed to get a response 📣 🆘 \(error.localizedDescription)"
+            if (error as? CancellationError) == nil {
+                await MainActor.run {
+                    lmStudioClient.errorMessage = "Failed to get a response 📣 🆘 \(error.localizedDescription)"
+                }
             }
         }
         isLoading = false
