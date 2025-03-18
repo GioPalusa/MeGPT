@@ -10,8 +10,9 @@ struct ChatView: View {
     @State private var isLoading = false
     @State private var isShowingSettings = false
     @State private var isInitialAppear = true
+    @State private var isKeyboardVisible = false
     @Environment(\.colorScheme) var colorScheme
-    
+
     @Query(sort: \Conversation.lastUsed, order: .reverse) private var savedConversations: [Conversation]
 
     var body: some View {
@@ -32,15 +33,24 @@ struct ChatView: View {
                                                 .cornerRadius(8)
                                                 .foregroundColor(.white)
                                         } else {
-                                            if settings.showAIBubble {
+                                            if message.text.starts(with: "[Reasoning]:") {
                                                 Text(message.text)
-                                                    .padding(10)
-                                                    .background(settings.aiBubbleColor)
-                                                    .cornerRadius(8)
-                                                    .foregroundColor(.primary)
+                                                    .font(.footnote)
+                                                    .italic()
+                                                    .foregroundColor(.gray)
+                                                    .lineLimit(nil)
+                                                    .fixedSize(horizontal: false, vertical: true)
                                             } else {
-                                                Text(message.text)
-                                                    .textSelection(.enabled)
+                                                if settings.showAIBubble {
+                                                    Text(message.text)
+                                                        .padding(10)
+                                                        .background(settings.aiBubbleColor)
+                                                        .cornerRadius(8)
+                                                        .foregroundColor(.primary)
+                                                } else {
+                                                    Text(message.text)
+                                                        .textSelection(.enabled)
+                                                }
                                             }
                                             Spacer()
                                         }
@@ -54,7 +64,7 @@ struct ChatView: View {
                                     .multilineTextAlignment(.center)
                                     .padding()
                             }
-                    
+
                             if let errorMessage = lmStudioClient.errorMessage {
                                 HStack {
                                     Image(systemName: "exclamationmark.triangle.fill")
@@ -65,7 +75,7 @@ struct ChatView: View {
                                 }
                                 .padding()
                             }
-                    
+
                             if isLoading {
                                 ProgressView()
                                     .progressViewStyle(.circular)
@@ -74,14 +84,14 @@ struct ChatView: View {
                             }
                         }
                         .padding()
-                        .onChange(of: lmStudioClient.currentConversation?.messages.count) { _, _ in
+                        .onChange(of: prompt) { _, _ in
                             if let lastMessage = lmStudioClient.currentConversation?.messages.last {
                                 scrollToLastMessage(scrollViewProxy: scrollViewProxy, lastMessage: lastMessage)
                             }
                         }
                     }
                     .simultaneousGesture(DragGesture().onChanged { _ in hideKeyboard() })
-                    
+
                     HStack {
                         TextField("What do you need?", text: $prompt)
                             .padding()
@@ -93,7 +103,7 @@ struct ChatView: View {
                             }
                             .background(.clear)
                             .cornerRadius(8)
-                    
+
                         Button(action: {
                             Task {
                                 await sendMessage(scrollViewProxy: scrollViewProxy)
@@ -109,6 +119,15 @@ struct ChatView: View {
                     .padding()
                     .background(Color.gray.opacity(0.1))
                     .cornerRadius(8)
+                    .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { _ in
+                        isKeyboardVisible = true
+                        if let lastMessage = lmStudioClient.currentConversation?.messages.last {
+                            scrollToLastMessage(scrollViewProxy: scrollViewProxy, lastMessage: lastMessage)
+                        }
+                    }
+                    .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { _ in
+                        isKeyboardVisible = false
+                    }
                 }
             }
             .gesture(TapGesture().onEnded { hideKeyboard() })
@@ -128,13 +147,13 @@ struct ChatView: View {
                         } catch {
                             lmStudioClient.errorMessage = "Error fetching models: \(error)"
                         }
-                            
+
                         if let lastConversation = savedConversations.first {
                             lmStudioClient.currentConversation = lastConversation
                         } else {
                             lmStudioClient.currentConversation = lmStudioClient.startNewConversation()
                         }
-                            
+
                         prepareHaptics()
                         isInitialAppear = false
                     }
@@ -189,7 +208,7 @@ struct ChatView: View {
         prompt = ""
         var accumulatedContent = ""
         var aiResponseMessage: Message?
-        
+
         if lmStudioClient.currentConversation == nil {
             let newconversation = lmStudioClient.startNewConversation()
             lmStudioClient.currentConversation = newconversation
@@ -199,10 +218,10 @@ struct ChatView: View {
             lmStudioClient.errorMessage = "Error creating conversation"
             return
         }
-        
+
         if let userMessage = lmStudioClient.addMessage(to: currentConversation, text: userPrompt, isUser: true) {
             scrollToLastMessage(scrollViewProxy: scrollViewProxy, lastMessage: userMessage)
-                
+
             if lmStudioClient.currentConversation?.title == nil, let currentConversation = lmStudioClient.currentConversation {
                 Task {
                     let generatedTitle = try await lmStudioClient.generateConversationTitle(
@@ -215,7 +234,7 @@ struct ChatView: View {
                 }
             }
         }
-        
+
         isLoading = true
 
         do {
@@ -273,7 +292,7 @@ struct ChatView: View {
             }
         }
     }
-    
+
     private func hideKeyboard() {
         UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
     }

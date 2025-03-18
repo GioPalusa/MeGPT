@@ -98,13 +98,24 @@ class LMStudioApiClient: ObservableObject {
                 do {
                     let (bytes, _) = try await session.bytes(for: request)
 
+                    var reasoningContent = ""
                     for try await line in bytes.lines {
                         if line.starts(with: "data: ") {
                             let jsonString = line.replacingOccurrences(of: "data: ", with: "")
                             if let jsonData = jsonString.data(using: .utf8),
                                let chunk = try? JSONDecoder().decode(ChatCompletionChunk.self, from: jsonData),
-                               let content = chunk.choices.first?.delta.content {
-                                continuation.yield(content)
+                               let choice = chunk.choices.first {
+                                
+                                if let reasoning = choice.delta.reasoning_content {
+                                    let formattedReasoning = reasoningContent.isEmpty ? "[Reasoning]: \(reasoning)" : " \(reasoning)"
+                                    continuation.yield(formattedReasoning) // Stream reasoning content immediately
+                                    reasoningContent += formattedReasoning
+                                }
+
+                                if let content = choice.delta.content {
+                                    continuation.yield(reasoningContent + content)
+                                    reasoningContent = ""
+                                }
                             }
                         }
                     }
@@ -350,6 +361,7 @@ struct ChatCompletionChunk: Codable {
 
     struct Delta: Codable {
         let content: String?
+        let reasoning_content: String? // Properly declared as optional string
         let role: String
     }
 }

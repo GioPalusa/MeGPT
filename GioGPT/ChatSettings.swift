@@ -92,7 +92,7 @@ class ChatSettings: ObservableObject {
         // Initialize with values from UserDefaults, or default if unset
         self.temperature = UserDefaults.standard.object(forKey: "temperature") as? Double ?? 1.0
         self.topP = UserDefaults.standard.object(forKey: "topP") as? Double ?? 1.0
-        self.maxTokens = UserDefaults.standard.object(forKey: "maxTokens") as? Int ?? 100
+        self.maxTokens = UserDefaults.standard.object(forKey: "maxTokens") as? Int ?? 1024
         self.presencePenalty = UserDefaults.standard.object(forKey: "presencePenalty") as? Double ?? 0.0
         self.frequencyPenalty = UserDefaults.standard.object(forKey: "frequencyPenalty") as? Double ?? 0.0
         self.repeatPenalty = UserDefaults.standard.object(forKey: "repeatPenalty") as? Double ?? 1.0
