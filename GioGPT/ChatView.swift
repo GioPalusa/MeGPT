@@ -38,7 +38,6 @@ struct ChatView: View {
                                                     .font(.footnote)
                                                     .italic()
                                                     .foregroundColor(.gray)
-                                                    .lineLimit(nil)
                                                     .fixedSize(horizontal: false, vertical: true)
                                             } else {
                                                 if settings.showAIBubble {
@@ -199,6 +198,7 @@ struct ChatView: View {
     }
 
     private func sendMessage(scrollViewProxy: ScrollViewProxy) async {
+        // Ensure a model is selected
         guard let selectedModelID = lmStudioClient.selectedModelID else {
             lmStudioClient.errorMessage = "Please select a model"
             return
@@ -209,20 +209,23 @@ struct ChatView: View {
         var accumulatedContent = ""
         var aiResponseMessage: Message?
 
+        // Ensure there is a current conversation, else start a new one
         if lmStudioClient.currentConversation == nil {
-            let newconversation = lmStudioClient.startNewConversation()
-            lmStudioClient.currentConversation = newconversation
+            let newConversation = lmStudioClient.startNewConversation()
+            lmStudioClient.currentConversation = newConversation
         }
-
+        
         guard let currentConversation = lmStudioClient.currentConversation else {
             lmStudioClient.errorMessage = "Error creating conversation"
             return
         }
-
+        
+        // Add the user's message to the conversation and scroll to it
         if let userMessage = lmStudioClient.addMessage(to: currentConversation, text: userPrompt, isUser: true) {
             scrollToLastMessage(scrollViewProxy: scrollViewProxy, lastMessage: userMessage)
-
-            if lmStudioClient.currentConversation?.title == nil, let currentConversation = lmStudioClient.currentConversation {
+            
+            // Generate a title if needed
+            if lmStudioClient.currentConversation?.title == nil {
                 Task {
                     let generatedTitle = try await lmStudioClient.generateConversationTitle(
                         conversation: currentConversation.messages,
@@ -234,46 +237,67 @@ struct ChatView: View {
                 }
             }
         }
-
+        
         isLoading = true
 
         do {
             if settings.stream == true {
-                let stream = lmStudioClient.sendChatCompletion(
-                    conversation: lmStudioClient.currentConversation!.messages,
+                // Get the tuple of streams (reasoning and content) from sendChatCompletion
+                let (reasoningStream, contentStream) = lmStudioClient.sendChatCompletion(
+                    conversation: currentConversation.messages,
                     modelId: selectedModelID,
                     topP: settings.topP,
                     temperature: settings.temperature,
                     maxTokens: settings.maxTokens,
                     stream: true
                 )
-
-                for try await content in stream {
+                
+                // Process the reasoning stream concurrently by accumulating reasoning text into a single message
+                var accumulatedReasoning = ""
+                var aiReasoningMessage: Message?
+                Task {
+                    for await reasoning in reasoningStream {
+                        accumulatedReasoning += reasoning
+                        try await MainActor.run {
+                            if aiReasoningMessage == nil {
+                                aiReasoningMessage = lmStudioClient.addMessage(to: currentConversation, text: accumulatedReasoning, isUser: false)
+                            } else {
+                                aiReasoningMessage?.text = accumulatedReasoning
+                                try context.save()
+                            }
+                            if let lastMessage = currentConversation.messages.last {
+                                scrollToLastMessage(scrollViewProxy: scrollViewProxy, lastMessage: lastMessage)
+                            }
+                        }
+                    }
+                }
+                
+                // Process the main content stream sequentially and accumulate the content
+                for try await content in contentStream {
                     accumulatedContent += content
-
                     try await MainActor.run {
                         if aiResponseMessage == nil {
-                            aiResponseMessage = lmStudioClient.addMessage(to: lmStudioClient.currentConversation!, text: accumulatedContent, isUser: false)
+                            aiResponseMessage = lmStudioClient.addMessage(to: currentConversation, text: accumulatedContent, isUser: false)
                         } else {
                             aiResponseMessage?.text = accumulatedContent
                             try context.save()
                         }
-
                         if let lastMessage = aiResponseMessage {
                             scrollToLastMessage(scrollViewProxy: scrollViewProxy, lastMessage: lastMessage)
                         }
                     }
                 }
             } else {
+                // Non-streaming implementation remains unchanged
                 guard let responseContent = try await lmStudioClient.sendChatCompletions(
-                    conversation: lmStudioClient.currentConversation!.messages,
+                    conversation: currentConversation.messages,
                     modelId: selectedModelID,
                     topP: settings.topP,
                     temperature: settings.temperature,
                     maxTokens: settings.maxTokens
                 ) else { return }
-
-                if let finalMessage = lmStudioClient.addMessage(to: lmStudioClient.currentConversation!, text: responseContent, isUser: false) {
+                
+                if let finalMessage = lmStudioClient.addMessage(to: currentConversation, text: responseContent, isUser: false) {
                     scrollToLastMessage(scrollViewProxy: scrollViewProxy, lastMessage: finalMessage)
                 }
             }

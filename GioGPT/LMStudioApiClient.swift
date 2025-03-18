@@ -72,60 +72,89 @@ class LMStudioApiClient: ObservableObject {
         return try JSONDecoder().decode(responseType, from: data)
     }
 
-    // Centraliserad metod för streamande förfrågningar
+    /// Sends a streaming request and returns two separate streams: one for reasoning content and one for main content.
+    /// - Parameters:
+    ///   - endpoint: The API endpoint to send the request to.
+    ///   - method: The HTTP method to use (default is "POST").
+    ///   - payload: The payload to send in the request body.
+    /// - Returns: A tuple containing a reasoning stream and a content stream.
     private func sendStreamingRequest(
         endpoint: Endpoint,
         method: String = "POST",
         payload: [String: Any]
-    ) -> AsyncStream<String> {
-        AsyncStream<String> { continuation in
-            Task {
-                var request = URLRequest(url: endpoint.url(baseURL: baseURL))
-                request.httpMethod = method
-                request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-                request.setValue("text/event-stream", forHTTPHeaderField: "Accept")
-                request.setValue("keep-alive", forHTTPHeaderField: "Connection")
-                request.setValue("identity", forHTTPHeaderField: "Accept-Encoding")
+    ) -> (reasoningStream: AsyncStream<String>, contentStream: AsyncStream<String>) {
+        // Create a variable to hold the continuation for the reasoning stream
+        var reasoningContinuation: AsyncStream<String>.Continuation?
+        // Initialize the reasoning stream
+        let reasoningStream = AsyncStream<String> { continuation in
+            reasoningContinuation = continuation
+        }
 
-                request.httpBody = try? JSONSerialization.data(withJSONObject: payload)
+        // Create a variable to hold the continuation for the content stream
+        var contentContinuation: AsyncStream<String>.Continuation?
+        // Initialize the content stream
+        let contentStream = AsyncStream<String> { continuation in
+            contentContinuation = continuation
+        }
 
-                let config = URLSessionConfiguration.ephemeral
-                config.timeoutIntervalForRequest = .infinity
-                config.timeoutIntervalForResource = .infinity
+        // Launch an asynchronous task to handle the streaming network request
+        Task {
+            var request = URLRequest(url: endpoint.url(baseURL: baseURL))
+            request.httpMethod = method
+            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            request.setValue("text/event-stream", forHTTPHeaderField: "Accept")
+            request.setValue("keep-alive", forHTTPHeaderField: "Connection")
+            request.setValue("identity", forHTTPHeaderField: "Accept-Encoding")
 
-                let session = URLSession(configuration: config)
+            // Serialize the payload into JSON
+            request.httpBody = try? JSONSerialization.data(withJSONObject: payload)
 
-                do {
-                    let (bytes, _) = try await session.bytes(for: request)
+            let config = URLSessionConfiguration.ephemeral
+            config.timeoutIntervalForRequest = .infinity
+            config.timeoutIntervalForResource = .infinity
 
-                    var reasoningContent = ""
-                    for try await line in bytes.lines {
-                        if line.starts(with: "data: ") {
-                            let jsonString = line.replacingOccurrences(of: "data: ", with: "")
-                            if let jsonData = jsonString.data(using: .utf8),
-                               let chunk = try? JSONDecoder().decode(ChatCompletionChunk.self, from: jsonData),
-                               let choice = chunk.choices.first {
-                                
-                                if let reasoning = choice.delta.reasoning_content {
-                                    let formattedReasoning = reasoningContent.isEmpty ? "[Reasoning]: \(reasoning)" : " \(reasoning)"
-                                    continuation.yield(formattedReasoning) // Stream reasoning content immediately
-                                    reasoningContent += formattedReasoning
+            let session = URLSession(configuration: config)
+
+            var didYieldReasoningPrefix = false // Flag to track if the prefix has been yielded
+            do {
+                // Start receiving the streaming response
+                let (bytes, _) = try await session.bytes(for: request)
+
+                // Process each line received from the stream
+                for try await line in bytes.lines {
+                    if line.starts(with: "data: ") {
+                        let jsonString = line.replacingOccurrences(of: "data: ", with: "")
+                        if let jsonData = jsonString.data(using: .utf8),
+                           let chunk = try? JSONDecoder().decode(ChatCompletionChunk.self, from: jsonData),
+                           let choice = chunk.choices.first {
+                            // If a reasoning part is available, yield it to the reasoning stream
+                            if let reasoning = choice.delta.reasoning_content {
+                                if didYieldReasoningPrefix {
+                                    // For subsequent chunks, yield only the reasoning text
+                                    reasoningContinuation?.yield(reasoning) // yields additional reasoning text without prefix
+                                } else {
+                                    // For the first chunk, yield with the prefix
+                                    reasoningContinuation?.yield("[Reasoning]: \(reasoning)") // Inline documentation: yields reasoning part with prefix
+                                    didYieldReasoningPrefix = true
                                 }
+                            }
 
-                                if let content = choice.delta.content {
-                                    continuation.yield(reasoningContent + content)
-                                    reasoningContent = ""
-                                }
+                            // If main content is available, yield it to the content stream
+                            if let content = choice.delta.content {
+                                contentContinuation?.yield(content) // Inline documentation: yields main content part
                             }
                         }
                     }
-                } catch {
-                    print("Streaming request failed: \(error)")
                 }
-                
-                continuation.finish()
+            } catch {
+                print("Streaming request failed: \(error)")
             }
+            // Finish both streams after processing completes
+            reasoningContinuation?.finish()
+            contentContinuation?.finish()
         }
+
+        return (reasoningStream: reasoningStream, contentStream: contentStream)
     }
 
     // Fetch models (icke-streamande)
@@ -188,7 +217,21 @@ class LMStudioApiClient: ObservableObject {
         return chatResponse.choices.first?.message.content
     }
 
-    // Skicka chatt-komplettering (streamande)
+    /// Sends a streaming chat completion and returns a tuple of two streams: one for reasoning content and one for main content.
+    /// - Parameters:
+    ///   - conversation: An array of `Message` objects representing the conversation.
+    ///   - modelId: The identifier of the model to use for the chat completion.
+    ///   - topP: Optional parameter for nucleus sampling probability.
+    ///   - temperature: Optional parameter for controlling randomness in the output.
+    ///   - maxTokens: Optional parameter to limit the maximum number of tokens in the output.
+    ///   - stream: A Boolean value indicating whether to use streaming mode (true).
+    ///   - stop: Optional array of stop sequences.
+    ///   - presencePenalty: Optional penalty to discourage repetition.
+    ///   - frequencyPenalty: Optional penalty based on token frequency.
+    ///   - logitBias: Optional dictionary to bias logits.
+    ///   - repeatPenalty: Optional repeat penalty.
+    ///   - seed: Optional seed value for randomization.
+    /// - Returns: A tuple containing a reasoning stream and a content stream.
     func sendChatCompletion(
         conversation: [Message],
         modelId: String,
@@ -202,7 +245,8 @@ class LMStudioApiClient: ObservableObject {
         logitBias: [String: Double]? = nil,
         repeatPenalty: Double? = nil,
         seed: String? = nil
-    ) -> AsyncStream<String> {
+    ) -> (reasoningStream: AsyncStream<String>, contentStream: AsyncStream<String>) {
+        // Construct the payload with the required parameters
         var payload: [String: Any] = [
             "model": modelId,
             "messages": conversation.map { ["role": $0.isUser ? "user" : "assistant", "content": $0.text] },
@@ -219,6 +263,7 @@ class LMStudioApiClient: ObservableObject {
         if let repeatPenalty = repeatPenalty { payload["repeat_penalty"] = repeatPenalty }
         if let seed = seed { payload["seed"] = seed }
 
+        // Return the tuple of streams provided by sendStreamingRequest
         return sendStreamingRequest(endpoint: .chatCompletions, method: "POST", payload: payload)
     }
 
